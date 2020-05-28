@@ -23,6 +23,7 @@ Mode = 0    No limb darkening
 Mode = 1    Linear Limb darkening model
 Mode = 2    Quadratic limb darkening model
 Mode = 3    Non linear limb darkening with 3 parameters
+Mode = 4    Non Linear limb darkening with 4 parameters
 
 
 ellipse(a, i, R_s, R_p):
@@ -35,7 +36,7 @@ star_intensity_plot():
 transit_plot_partial():
     plots transit curve over the period of transit (occultation is not considered)
 
-transit_plot_fulll():
+transit_plot_full():
      plots transit curve over the entire orbital period (occultation is not considered)
 
 
