@@ -8,48 +8,57 @@ R_pl = 1
 a = 50
 i = 1.55	#np.pi/2
 sample = 1000
+alb = 0.52	#atmos[heric albedo
 
 
 def area(theta, R):
 	return (R**2) * (1/2) * (theta - np.sin(theta))
 
 
-
-def raw_transit(d, Rs, Rp):
-	if d >= (Rs + Rp):
-		return 1
-
-	elif d <= (Rs - Rp):
-		return 1 - (Rp/Rs)**2
-
-	else:
-		theta_p = 2 * np.arccos((d**2 - (Rs**2 - Rp**2))/(2*d*Rp))
-		theta_s = 2 * np.arcsin((Rp/Rs) * np.sin(theta_p / 2))
-		Ap = area(theta_p, Rp)
-		As = area(theta_s, Rs)
-		return 1 - (As + Ap)/(np.pi * Rs**2)
+def luminosity_reflected(a, Rp, i, theta, albedo = alb):
+	#phase function
+	phi = (1 - np.sin(i)*np.sin(theta))/2
+	return albedo * (1/4) * ((Rp / a)**2) * phi
 
 
-def transit_LD(d, Rs, Rp, mode = 0):	#mode = 0 no limb darkening
-					#mode = 1 linear limb darkening
+def luminosity_thermal(a, R_pl, albedo = alb):
+	return (1 - albedo) * ((R_pl/a)**2) * (1/4)
+
+
+def transit_circular(a, i, theta, Rs, Rp, mode = 0, reflection = False, thermal = True):
+	major_axis = a			#mode = 0 no limb darkening
+	minor_axis = a * np.cos(i)	#mode = 1 linear limb darkening
 					#mode = 2 quad limb darkening
-					#mode = 3 non linear limb darkening 3 params
-	if d >= (Rs + Rp):		#mode = 4 non linear limb darkening 4 params
-		return 1
+	x = major_axis * np.cos(theta)	#mode = 3 3 parameter limb darkening
+	y = minor_axis * np.sin(theta)	#mode = 4 4 parameter limb darkening
+	d = (x**2 + y**2)**(0.5)
 
+	L_stellar = integrate.quad(limb_darkening_integrand, 0, Rs, args = (Rs, mode))[0]
+
+	if thermal:
+		L_planet = L_stellar * luminosity_thermal(a, Rp)
+	else:
+		L_planet = 0
+
+	if reflection:
+		L_reflected = L_stellar * luminosity_reflected(a, Rp, i, theta)
+	else:
+		L_reflected = 0
+
+
+	if d >= (Rs + Rp):
+		A = 0
 	elif d <= (Rs - Rp):
 		A = np.pi * (Rp)**(2)
-
 	else:
 		theta_p = 2 * np.arccos((d**2 - (Rs**2 - Rp**2))/(2*d*Rp))
 		theta_s = 2 * np.arcsin((Rp/Rs) * np.sin(theta_p / 2))
 		Ap = area(theta_p, Rp)
 		As = area(theta_s, Rs)
-		A = As + Ap
-
+		A = Ap + As
 
 	if mode == 0:
-		return 1 - A / (np.pi * Rs**2)
+		intensity = 1
 	elif mode == 1:
 		intensity = limb_darkening_linear(min([d, Rs]), Rs)
 	elif mode == 2:
@@ -61,32 +70,44 @@ def transit_LD(d, Rs, Rp, mode = 0):	#mode = 0 no limb darkening
 	else:
 		intensity = 0
 
-	L_total = integrate.quad(limb_darkening_integrand, 0, Rs, args = (Rs, mode))[0]
+	L_blocked = A * intensity
+	L_total = L_stellar + L_reflected + L_planet
 
-	return 1 - (A/L_total)*intensity
-
-
-
-def occultation(d, Rs, Rp):
-	return 1
+	return (L_total - L_blocked)
 
 
-
-def ellipse(a, i, R_s = R_star, R_p = R_pl, mode = 0):
-	minor_axis = a * np.cos(i)
+def occultation_circular(a, i, theta, Rs, Rp, mode = 0, albedo = alb, thermal = False):
 	major_axis = a
-	t_data = []
+	minor_axis = a * np.cos(i)
 
-	for theta in np.arange(0, 2 * np.pi, (2 * np.pi)/sample):
-		x = major_axis * np.cos(theta)
-		y = minor_axis * np.sin(theta)
-		d = ((x**2 + y**2)**(1/2))
-		if theta <= np.pi:
-			t_data.append(transit_LD(d, R_s, R_p, mode))
-		else:
-			t_data.append(occultation(d, R_s, R_p))
+	x = major_axis * np.cos(theta)
+	y = minor_axis * np.sin(theta)
+	d = (x**2 + y**2)**(0.5)
 
-	return t_data
+	L_stellar = integrate.quad(limb_darkening_integrand, 0, Rs, args = (Rs, mode))[0]
+
+	if thermal:
+		L_planet = luminosity_thermal(a, Rp) * L_stellar
+	else:
+		L_planet = 0
+
+
+	if d >= (Rs + Rp):
+		A = 0
+	elif d <= (Rs - Rp):
+		A = np.pi * (Rp)**2
+	else:
+		theta_p = 2 * np.arccos((d**2 - (Rs**2 - Rp**2))/(2*d*Rp))
+		theta_s = 2 * np.arcsin((Rp/Rs) * np.sin(theta_p / 2))
+		Ap = area(theta_p, Rp)
+		As = area(theta_s, Rs)
+		A = As + Ap
+
+	L_blocked = (albedo/(4*np.pi)) * (A/(a**2)) * L_stellar
+	L_reflected = L_stellar * luminosity_reflected(a, Rp, i, theta)
+	L_planet = L_planet * (1 - (A/(np.pi * Rp**2)))
+
+	return L_stellar + L_planet + max([L_reflected - L_blocked,0])
 
 
 
@@ -115,17 +136,20 @@ def limb_darkening_nlinear4(d, R_s, u1 = 0.30, u2 = 0.10, u3 = 0.07, u4 = 0.03):
 
 
 def limb_darkening_integrand(d, R_s, mode):
-	if mode == 1:
-		return 2 * np.pi * d * limb_darkening_linear(d, R_s)
+	val = 4 * np.pi * R_s * d * (1 / (R_s**2 - d**2)**(1/2))
+	if mode == 0:
+		return val
+	elif mode == 1:
+		return val * limb_darkening_linear(d, R_s)
 
 	elif mode == 2:
-		return 2 * np.pi * d * limb_darkening_quad(d, R_s)
+		return val * limb_darkening_quad(d, R_s)
 
 	elif mode == 3:
-		return 2 * np.pi * d * limb_darkening_nlinear3(d, R_s)
+		return val * limb_darkening_nlinear3(d, R_s)
 
 	elif mode == 4:
-		return 2 * np.pi * d * limb_darkening_nlinear4(d, R_s)
+		return val * limb_darkening_nlinear4(d, R_s)
 
 	else:
 		return 0
@@ -191,42 +215,77 @@ def star_intensity_plot():		#Taking into account the Limb Darkening effects
 
 
 
-def transit_plot_partial():
-	d = np.concatenate((np.arange(R_star + R_pl, a*np.cos(i), -(R_star + R_pl - a*np.cos(i))/sample),np.arange(a*np.cos(i), R_star + R_pl, (R_star + R_pl - a*np.cos(i))/sample)),axis = 0)
-	t_data_r = [transit_LD(x, R_star, R_pl, mode = 0) for x in d]
-	t_data_1 = [transit_LD(x, R_star, R_pl, mode = 1) for x in d]
-	t_data_2 = [transit_LD(x, R_star, R_pl, mode = 2) for x in d]
-	t_data_3 = [transit_LD(x, R_star, R_pl, mode = 3) for x in d]
-	t_data_4 = [transit_LD(x, R_star, R_pl, mode = 4) for x in d]
-	counter = range(len(d))
-	plt.plot(counter, t_data_r, label = "TRANSIT with NO LD")
-	plt.plot(counter, t_data_1, label = "TRANSIT linear LD")
-	plt.plot(counter, t_data_2, label = "TRANSIT quadratic LD")
-	plt.plot(counter, t_data_3, label = "TRANSIT 3 parameter LD")
-	plt.plot(counter, t_data_4, label = "TRANSIT 4 parametr LD")
+def transit_plot():
+	val = (((R_star + R_pl)/a)**2 - (np.cos(i))**2)**(0.5) * (1/np.sin(i))
+	theta_1 = np.arccos(val)
+	theta_2 = np.arccos(-1 * val)
+	angle = np.arange(theta_1, theta_2, (theta_2 - theta_1)/sample)
+
+	t_data_0 = [transit_circular(a, i, theta, R_star, R_pl, mode = 0, reflection = True) for theta in angle]
+	t_data_1 = [transit_circular(a, i, theta, R_star, R_pl, mode = 1, reflection = True) for theta in angle]
+	t_data_2 = [transit_circular(a, i, theta, R_star, R_pl, mode = 2, reflection = True) for theta in angle]
+	t_data_3 = [transit_circular(a, i, theta, R_star, R_pl, mode = 3, reflection = True) for theta in angle]
+	t_data_4 = [transit_circular(a, i, theta, R_star, R_pl, mode = 4, reflection = True) for theta in angle]
+
+	plt.plot(angle, normalise(t_data_0), label = "TRANSIT with NO LD")
+	plt.plot(angle, normalise(t_data_1), label = "TRANSIT linear LD")
+	plt.plot(angle, normalise(t_data_2), label = "TRANSIT quadratic LD")
+	plt.plot(angle, normalise(t_data_3), label = "TRANSIT 3 parameter LD")
+	plt.plot(angle, normalise(t_data_4), label = "TRANSIT 4 parametr LD")
 	plt.legend()
 	plt.show()
 
 
-def transit_plot_full():
+def occultation_plot():
+	val = (((R_star + R_pl)/a)**2 - (np.cos(i))**2)**(0.5) * (1/np.sin(i))
+	theta_1 = np.arccos(val) + np.pi
+	theta_2 = np.arccos(-1 * val) + np.pi
+	angle = np.arange(theta_1, theta_2, (theta_2 - theta_1)/sample)
+
+	t_data = [occultation_circular(a, i, theta, R_star, R_pl) for theta in angle]
+	plt.plot(angle, normalise(t_data), label = "Occultation")
+	plt.legend()
+	plt.show()
+
+
+def orbit_plot():
 	x = np.arange(0, 2 * np.pi, (2 * np.pi)/sample)
-	t_data_0 = ellipse(a, i, mode = 0)
-	t_data_1 = ellipse(a, i, mode = 1)
-	t_data_2 = ellipse(a, i, mode = 2)
-	t_data_3 = ellipse(a, i, mode = 3)
-	t_data_4 = ellipse(a, i, mode = 4)
+	t_data_0 = []
+	t_data_1 = []
+	t_data_2 = []
+	t_data_3 = []
+	t_data_4 = []
 
-	plt.plot(x, t_data_0, label = "No limb darkening")
-	plt.plot(x, t_data_1, label = "Linear LD")
-	plt.plot(x, t_data_2, label = "Quad LD")
-	plt.plot(x, t_data_3, label = "3 Params LD")
-	plt.plot(x, t_data_4, label = "4 Params LD")
+	for theta in x:
+		if theta <= np.pi:
+			t_data_0.append(transit_circular(a, i, theta, R_star, R_pl, mode = 0, reflection = True))
+			t_data_1.append(transit_circular(a, i, theta, R_star, R_pl, mode = 1, reflection = True))
+			t_data_2.append(transit_circular(a, i, theta, R_star, R_pl, mode = 2, reflection = True))
+			t_data_3.append(transit_circular(a, i, theta, R_star, R_pl, mode = 3, reflection = True))
+			t_data_4.append(transit_circular(a, i, theta, R_star, R_pl, mode = 4, reflection = True))
+		else:
+			t_data_0.append(occultation_circular(a, i, theta, R_star, R_pl, mode = 0))
+			t_data_1.append(occultation_circular(a, i, theta, R_star, R_pl, mode = 1))
+			t_data_2.append(occultation_circular(a, i, theta, R_star, R_pl, mode = 2))
+			t_data_3.append(occultation_circular(a, i, theta, R_star, R_pl, mode = 3))
+			t_data_4.append(occultation_circular(a, i, theta, R_star, R_pl, mode = 4))
+
+
+	plt.plot(x, normalise(t_data_0), label = "No limb darkening")
+	plt.plot(x, normalise(t_data_1), label = "Linear LD")
+	plt.plot(x, normalise(t_data_2), label = "Quad LD")
+	plt.plot(x, normalise(t_data_3), label = "3 Params LD")
+	plt.plot(x, normalise(t_data_4), label = "4 Params LD")
 	plt.legend()
 	plt.show()
+
+
+def normalise(arr):
+	max_val = max(arr)
+	return [x / max_val for x in arr]
 
 
 #star_intensity_plot()
-#transit_plot_partial()
-transit_plot_full()
-
+transit_plot()
+occultation_plot()
 
